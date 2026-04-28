@@ -59,8 +59,8 @@ def comparar():
         liv_idx = liv.set_index("SKU_norm")
         gym_agg = gym.groupby("SKU_norm")["_qty"].sum()
 
-        liv_skus = set(liv["SKU_norm"])
-        gym_skus = set(gym["SKU_norm"])
+        liv_skus = set(liv["SKU_norm"].astype(str))
+        gym_skus = set(gym["SKU_norm"].astype(str))
         en_ambos = liv_skus & gym_skus
         solo_liv = liv_skus - gym_skus
         solo_gym = gym_skus - liv_skus
