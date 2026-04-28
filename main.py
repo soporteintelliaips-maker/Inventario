@@ -1,7 +1,7 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_file
 import pandas as pd
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2 import service_account
 import io, os, tempfile
 
@@ -14,7 +14,8 @@ def get_drive_service():
     import json
     creds_info = json.loads(CREDS_JSON)
     creds = service_account.Credentials.from_service_account_info(
-        creds_info, scopes=["https://www.googleapis.com/auth/drive"]
+        creds_info,
+        scopes=["https://www.googleapis.com/auth/drive"]
     )
     return build("drive", "v3", credentials=creds)
 
@@ -31,62 +32,105 @@ def download_file(service, file_id):
 @app.route("/")
 def home():
     return jsonify({"status": "ok"})
+
 @app.route("/comparar", methods=["GET"])
 def comparar():
     try:
         service = get_drive_service()
+
         results = service.files().list(
             q=f"'{FOLDER_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and trashed=false",
             fields="files(id, name, createdTime)",
             orderBy="createdTime"
         ).execute()
+
         files = results.get("files", [])
         if len(files) < 2:
             return jsonify({"error": "Necesito exactamente 2 archivos Excel en la carpeta"}), 400
 
+        # Descargar archivos
         buf1 = download_file(service, files[0]["id"])
         buf2 = download_file(service, files[1]["id"])
 
         liv = pd.read_excel(buf1)
         gym = pd.read_excel(buf2)
 
+        # ✅ Normalizar SKU
         liv["SKU_norm"] = liv.iloc[:, 0].astype(str).str.strip().str.upper()
         gym["SKU_norm"] = gym.iloc[:, 0].astype(str).str.strip().str.upper()
 
+        # ✅ Eliminar SKUs inválidos
+        liv = liv[(liv["SKU_norm"].notna()) & (liv["SKU_norm"] != "NAN") & (liv["SKU_norm"] != "")]
+        gym = gym[(gym["SKU_norm"].notna()) & (gym["SKU_norm"] != "NAN") & (gym["SKU_norm"] != "")]
+
+        # ✅ Cantidades
         liv["_qty"] = pd.to_numeric(liv.iloc[:, 1], errors="coerce").fillna(0)
         gym["_qty"] = pd.to_numeric(gym.iloc[:, 1], errors="coerce").fillna(0)
 
+        # Índices
         liv_idx = liv.set_index("SKU_norm")
         gym_agg = gym.groupby("SKU_norm")["_qty"].sum()
 
-        liv_skus = set(liv["SKU_norm"].astype(str))
-        gym_skus = set(gym["SKU_norm"].astype(str))
+        # Sets
+        liv_skus = set(liv["SKU_norm"])
+        gym_skus = set(gym["SKU_norm"])
+
         en_ambos = liv_skus & gym_skus
         solo_liv = liv_skus - gym_skus
         solo_gym = gym_skus - liv_skus
 
         rows = []
-        for sku in sorted(en_ambos, key=str):
-            q1 = float(liv_idx.loc[sku, "_qty"].iloc[0] if hasattr(liv_idx.loc[sku, "_qty"], 'iloc') else liv_idx.loc[sku, "_qty"])
-            q2 = float(gym_agg[sku])
+
+        # Comparar en ambos
+        for sku in sorted(en_ambos):
+            qty_liv = liv_idx.loc[sku, "_qty"]
+            q1 = float(qty_liv.iloc[0] if hasattr(qty_liv, "iloc") else qty_liv)
+            q2 = float(gym_agg.get(sku, 0))
+
             if q1 != q2:
-                rows.append({"SKU": sku, "Cantidad Liverpool": q1, "Cantidad Almacén": q2, "Diferencia": q2 - q1, "Tipo": "Cantidad diferente"})
-        for sku in sorted(solo_liv, key=str):
+                rows.append({
+                    "SKU": sku,
+                    "Cantidad Liverpool": q1,
+                    "Cantidad Almacén": q2,
+                    "Diferencia": q2 - q1,
+                    "Tipo": "Cantidad diferente"
+                })
+
+        # Solo Liverpool
+        for sku in sorted(solo_liv):
             qty = liv_idx.loc[sku, "_qty"]
-            q1 = float(qty.iloc[0] if hasattr(qty, 'iloc') else qty)
-            rows.append({"SKU": sku, "Cantidad Liverpool": q1, "Cantidad Almacén": 0, "Diferencia": None, "Tipo": "Solo en Liverpool"})
-        for sku in sorted(solo_gym, key=str):
-            rows.append({"SKU": sku, "Cantidad Liverpool": 0, "Cantidad Almacén": float(gym_agg[sku]), "Diferencia": None, "Tipo": "Solo en Almacén"})
+            q1 = float(qty.iloc[0] if hasattr(qty, "iloc") else qty)
+
+            rows.append({
+                "SKU": sku,
+                "Cantidad Liverpool": q1,
+                "Cantidad Almacén": 0,
+                "Diferencia": None,
+                "Tipo": "Solo en Liverpool"
+            })
+
+        # Solo Almacén
+        for sku in sorted(solo_gym):
+            q2 = float(gym_agg.get(sku, 0))
+
+            rows.append({
+                "SKU": sku,
+                "Cantidad Liverpool": 0,
+                "Cantidad Almacén": q2,
+                "Diferencia": None,
+                "Tipo": "Solo en Almacén"
+            })
 
         df_result = pd.DataFrame(rows)
 
+        # 🧹 Borrar archivos de Drive
         for f in files:
             service.files().delete(fileId=f["id"]).execute()
-            
+
+        # 📄 Crear archivo temporal
         tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         df_result.to_excel(tmp.name, index=False)
 
-        from flask import send_file
         return send_file(
             tmp.name,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -94,19 +138,12 @@ def comparar():
             download_name="Diferencias_Inventario.xlsx"
         )
 
-        file_metadata = {"name": "Diferencias_Inventario.xlsx", "parents": [FOLDER_ID]}
-        media = MediaFileUpload(tmp.name, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        uploaded = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-
-        file_id = uploaded.get("id")
-        service.permissions().create(fileId=file_id, body={"type": "anyone", "role": "reader"}).execute()
-        download_link = f"https://drive.google.com/uc?export=download&id={file_id}"
-
-        return jsonify({"download_link": download_link})
-
     except Exception as e:
         import traceback
-        return jsonify({"error": str(e), "detalle": traceback.format_exc()}), 500
+        return jsonify({
+            "error": str(e),
+            "detalle": traceback.format_exc()
+        }), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
