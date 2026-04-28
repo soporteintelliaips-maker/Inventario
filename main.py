@@ -66,14 +66,14 @@ def comparar():
         solo_gym = gym_skus - liv_skus
 
         rows = []
-        for sku in sorted(en_ambos):
+        for sku in sorted(en_ambos, key=str):
             q1 = float(liv_idx.loc[sku, "_qty"])
             q2 = float(gym_agg[sku])
             if q1 != q2:
                 rows.append({"SKU": sku, "Cantidad Liverpool": q1, "Cantidad Almacén": q2, "Diferencia": q2 - q1, "Tipo": "Cantidad diferente"})
-        for sku in sorted(solo_liv):
+        for sku in sorted(solo_liv, key=str):
             rows.append({"SKU": sku, "Cantidad Liverpool": float(liv_idx.loc[sku, "_qty"]), "Cantidad Almacén": 0, "Diferencia": None, "Tipo": "Solo en Liverpool"})
-        for sku in sorted(solo_gym):
+        for sku in sorted(solo_gym, key=str):
             rows.append({"SKU": sku, "Cantidad Liverpool": 0, "Cantidad Almacén": float(gym_agg[sku]), "Diferencia": None, "Tipo": "Solo en Almacén"})
 
         df_result = pd.DataFrame(rows)
