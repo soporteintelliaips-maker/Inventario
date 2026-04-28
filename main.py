@@ -65,7 +65,7 @@ def comparar():
         solo_liv = liv_skus - gym_skus
         solo_gym = gym_skus - liv_skus
 
-       rows = []
+        rows = []
         for sku in sorted(en_ambos, key=str):
             q1 = float(liv_idx.loc[sku, "_qty"].iloc[0] if hasattr(liv_idx.loc[sku, "_qty"], 'iloc') else liv_idx.loc[sku, "_qty"])
             q2 = float(gym_agg[sku])
