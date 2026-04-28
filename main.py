@@ -28,6 +28,10 @@ def download_file(service, file_id):
     buf.seek(0)
     return buf
 
+@app.route("/")
+def home():
+    return jsonify({"status": "ok"})
+    
 @app.route("/comparar", methods=["GET"])
 def comparar():
     try:
