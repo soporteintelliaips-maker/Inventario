@@ -1,0 +1,92 @@
+from flask import Flask, jsonify
+import pandas as pd
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+from google.oauth2 import service_account
+import io, os, tempfile
+
+app = Flask(__name__)
+
+FOLDER_ID = os.environ.get("FOLDER_ID")
+CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
+
+def get_drive_service():
+    import json
+    creds_info = json.loads(CREDS_JSON)
+    creds = service_account.Credentials.from_service_account_info(
+        creds_info, scopes=["https://www.googleapis.com/auth/drive"]
+    )
+    return build("drive", "v3", credentials=creds)
+
+def download_file(service, file_id):
+    request = service.files().get_media(fileId=file_id)
+    buf = io.BytesIO()
+    downloader = MediaIoBaseDownload(buf, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    buf.seek(0)
+    return buf
+
+@app.route("/comparar", methods=["GET"])
+def comparar():
+    try:
+        service = get_drive_service()
+        results = service.files().list(
+            q=f"'{FOLDER_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and trashed=false",
+            fields="files(id, name, createdTime)",
+            orderBy="createdTime"
+        ).execute()
+        files = results.get("files", [])
+        if len(files) < 2:
+            return jsonify({"error": "Necesito exactamente 2 archivos Excel en la carpeta"}), 400
+
+        buf1 = download_file(service, files[0]["id"])
+        buf2 = download_file(service, files[1]["id"])
+
+        liv = pd.read_excel(buf1)
+        gym = pd.read_excel(buf2)
+
+        liv["SKU_norm"] = liv.iloc[:, 0].astype(str).str.strip().str.upper()
+        gym["SKU_norm"] = gym.iloc[:, 0].astype(str).str.strip().str.upper()
+        gym.iloc[:, 1] = pd.to_numeric(gym.iloc[:, 1], errors="coerce").fillna(0)
+
+        liv_idx = liv.set_index("SKU_norm")
+        gym_agg = gym.groupby("SKU_norm").iloc[:, 1].sum() if False else gym.groupby("SKU_norm")[gym.columns[1]].sum()
+
+        liv_skus = set(liv["SKU_norm"])
+        gym_skus = set(gym["SKU_norm"])
+        en_ambos = liv_skus & gym_skus
+        solo_liv = liv_skus - gym_skus
+        solo_gym = gym_skus - liv_skus
+
+        rows = []
+        for sku in sorted(en_ambos):
+            q1 = liv_idx.loc[sku, liv.columns[1]]
+            q2 = gym_agg[sku]
+            if q1 != q2:
+                rows.append({"SKU": sku, "Cantidad Liverpool": q1, "Cantidad Almacén": q2, "Diferencia": q2 - q1, "Tipo": "Cantidad diferente"})
+        for sku in sorted(solo_liv):
+            rows.append({"SKU": sku, "Cantidad Liverpool": liv_idx.loc[sku, liv.columns[1]], "Cantidad Almacén": 0, "Diferencia": None, "Tipo": "Solo en Liverpool"})
+        for sku in sorted(solo_gym):
+            rows.append({"SKU": sku, "Cantidad Liverpool": 0, "Cantidad Almacén": gym_agg[sku], "Diferencia": None, "Tipo": "Solo en Almacén"})
+
+        df_result = pd.DataFrame(rows)
+        tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        df_result.to_excel(tmp.name, index=False)
+
+        file_metadata = {"name": "Diferencias_Inventario.xlsx", "parents": [FOLDER_ID]}
+        media = MediaFileUpload(tmp.name, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        uploaded = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+
+        file_id = uploaded.get("id")
+        service.permissions().create(fileId=file_id, body={"type": "anyone", "role": "reader"}).execute()
+        download_link = f"https://drive.google.com/uc?export=download&id={file_id}"
+
+        return jsonify({"download_link": download_link})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
