@@ -41,29 +41,33 @@ def comparar():
         results = service.files().list(
             q=f"'{FOLDER_ID}' in parents and mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and trashed=false",
             fields="files(id, name, createdTime)",
-            orderBy="createdTime"
+            orderBy="createdTime desc"
         ).execute()
 
         files = results.get("files", [])
-        if len(files) < 2:
-            return jsonify({"error": "Necesito exactamente 2 archivos Excel en la carpeta"}), 400
 
-        # Descargar archivos
-        buf1 = download_file(service, files[0]["id"])
-        buf2 = download_file(service, files[1]["id"])
+        if len(files) < 2:
+            return jsonify({"error": "Se necesitan al menos 2 archivos Excel en la carpeta"}), 400
+
+        # Tomar los 2 más recientes
+        file1 = files[0]
+        file2 = files[1]
+
+        buf1 = download_file(service, file1["id"])
+        buf2 = download_file(service, file2["id"])
 
         liv = pd.read_excel(buf1)
         gym = pd.read_excel(buf2)
 
-        # ✅ Normalizar SKU
+        # Normalizar SKU
         liv["SKU_norm"] = liv.iloc[:, 0].astype(str).str.strip().str.upper()
         gym["SKU_norm"] = gym.iloc[:, 0].astype(str).str.strip().str.upper()
 
-        # ✅ Eliminar SKUs inválidos
+        # Limpiar SKUs inválidos
         liv = liv[(liv["SKU_norm"].notna()) & (liv["SKU_norm"] != "NAN") & (liv["SKU_norm"] != "")]
         gym = gym[(gym["SKU_norm"].notna()) & (gym["SKU_norm"] != "NAN") & (gym["SKU_norm"] != "")]
 
-        # ✅ Cantidades
+        # Cantidades
         liv["_qty"] = pd.to_numeric(liv.iloc[:, 1], errors="coerce").fillna(0)
         gym["_qty"] = pd.to_numeric(gym.iloc[:, 1], errors="coerce").fillna(0)
 
@@ -81,7 +85,7 @@ def comparar():
 
         rows = []
 
-        # Comparar en ambos
+        # Comparar
         for sku in sorted(en_ambos):
             qty_liv = liv_idx.loc[sku, "_qty"]
             q1 = float(qty_liv.iloc[0] if hasattr(qty_liv, "iloc") else qty_liv)
@@ -123,11 +127,7 @@ def comparar():
 
         df_result = pd.DataFrame(rows)
 
-        # 🧹 Borrar archivos de Drive
-        for f in files:
-            service.files().delete(fileId=f["id"]).execute()
-
-        # 📄 Crear archivo temporal
+        # Crear archivo temporal
         tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         df_result.to_excel(tmp.name, index=False)
 
