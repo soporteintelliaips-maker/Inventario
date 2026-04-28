@@ -1,7 +1,7 @@
-from flask import Flask, jsonify, send_file
+from flask import Flask, jsonify
 import pandas as pd
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from google.oauth2 import service_account
 import io, os, tempfile
 
@@ -31,7 +31,6 @@ def download_file(service, file_id):
 @app.route("/")
 def home():
     return jsonify({"status": "ok"})
-
 @app.route("/comparar", methods=["GET"])
 def comparar():
     try:
@@ -82,17 +81,28 @@ def comparar():
         df_result = pd.DataFrame(rows)
 
         for f in files:
-            service.files().update(fileId=f["id"], body={"trashed": True}).execute()
-
+            service.files().delete(fileId=f["id"]).execute()
+            
         tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         df_result.to_excel(tmp.name, index=False)
 
+        from flask import send_file
         return send_file(
             tmp.name,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             as_attachment=True,
             download_name="Diferencias_Inventario.xlsx"
         )
+
+        file_metadata = {"name": "Diferencias_Inventario.xlsx", "parents": [FOLDER_ID]}
+        media = MediaFileUpload(tmp.name, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        uploaded = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+
+        file_id = uploaded.get("id")
+        service.permissions().create(fileId=file_id, body={"type": "anyone", "role": "reader"}).execute()
+        download_link = f"https://drive.google.com/uc?export=download&id={file_id}"
+
+        return jsonify({"download_link": download_link})
 
     except Exception as e:
         import traceback
