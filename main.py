@@ -82,6 +82,14 @@ def comparar():
         tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         df_result.to_excel(tmp.name, index=False)
 
+        from flask import send_file
+        return send_file(
+            tmp.name,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name="Diferencias_Inventario.xlsx"
+        )
+
         file_metadata = {"name": "Diferencias_Inventario.xlsx", "parents": [FOLDER_ID]}
         media = MediaFileUpload(tmp.name, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         uploaded = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
