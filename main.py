@@ -79,6 +79,10 @@ def comparar():
             rows.append({"SKU": sku, "Cantidad Liverpool": 0, "Cantidad Almacén": float(gym_agg[sku]), "Diferencia": None, "Tipo": "Solo en Almacén"})
 
         df_result = pd.DataFrame(rows)
+
+        for f in files:
+            service.files().delete(fileId=f["id"]).execute()
+            
         tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         df_result.to_excel(tmp.name, index=False)
 
