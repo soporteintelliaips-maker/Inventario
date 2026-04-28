@@ -79,10 +79,6 @@ def comparar():
             rows.append({"SKU": sku, "Cantidad Liverpool": 0, "Cantidad Almacén": float(gym_agg[sku]), "Diferencia": None, "Tipo": "Solo en Almacén"})
 
         df_result = pd.DataFrame(rows)
-
-        for f in files:
-            service.files().delete(fileId=f["id"]).execute()
-
         tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         df_result.to_excel(tmp.name, index=False)
 
@@ -93,6 +89,16 @@ def comparar():
             as_attachment=True,
             download_name="Diferencias_Inventario.xlsx"
         )
+
+        file_metadata = {"name": "Diferencias_Inventario.xlsx", "parents": [FOLDER_ID]}
+        media = MediaFileUpload(tmp.name, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        uploaded = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+
+        file_id = uploaded.get("id")
+        service.permissions().create(fileId=file_id, body={"type": "anyone", "role": "reader"}).execute()
+        download_link = f"https://drive.google.com/uc?export=download&id={file_id}"
+
+        return jsonify({"download_link": download_link})
 
     except Exception as e:
         import traceback
