@@ -31,7 +31,6 @@ def download_file(service, file_id):
 @app.route("/")
 def home():
     return jsonify({"status": "ok"})
-    
 @app.route("/comparar", methods=["GET"])
 def comparar():
     try:
@@ -53,10 +52,12 @@ def comparar():
 
         liv["SKU_norm"] = liv.iloc[:, 0].astype(str).str.strip().str.upper()
         gym["SKU_norm"] = gym.iloc[:, 0].astype(str).str.strip().str.upper()
-        gym.iloc[:, 1] = pd.to_numeric(gym.iloc[:, 1], errors="coerce").fillna(0)
+
+        liv["_qty"] = pd.to_numeric(liv.iloc[:, 1], errors="coerce").fillna(0)
+        gym["_qty"] = pd.to_numeric(gym.iloc[:, 1], errors="coerce").fillna(0)
 
         liv_idx = liv.set_index("SKU_norm")
-        gym_agg = gym.groupby("SKU_norm").iloc[:, 1].sum() if False else gym.groupby("SKU_norm")[gym.columns[1]].sum()
+        gym_agg = gym.groupby("SKU_norm")["_qty"].sum()
 
         liv_skus = set(liv["SKU_norm"])
         gym_skus = set(gym["SKU_norm"])
@@ -66,14 +67,14 @@ def comparar():
 
         rows = []
         for sku in sorted(en_ambos):
-            q1 = liv_idx.loc[sku, liv.columns[1]]
-            q2 = gym_agg[sku]
+            q1 = float(liv_idx.loc[sku, "_qty"])
+            q2 = float(gym_agg[sku])
             if q1 != q2:
                 rows.append({"SKU": sku, "Cantidad Liverpool": q1, "Cantidad Almacén": q2, "Diferencia": q2 - q1, "Tipo": "Cantidad diferente"})
         for sku in sorted(solo_liv):
-            rows.append({"SKU": sku, "Cantidad Liverpool": liv_idx.loc[sku, liv.columns[1]], "Cantidad Almacén": 0, "Diferencia": None, "Tipo": "Solo en Liverpool"})
+            rows.append({"SKU": sku, "Cantidad Liverpool": float(liv_idx.loc[sku, "_qty"]), "Cantidad Almacén": 0, "Diferencia": None, "Tipo": "Solo en Liverpool"})
         for sku in sorted(solo_gym):
-            rows.append({"SKU": sku, "Cantidad Liverpool": 0, "Cantidad Almacén": gym_agg[sku], "Diferencia": None, "Tipo": "Solo en Almacén"})
+            rows.append({"SKU": sku, "Cantidad Liverpool": 0, "Cantidad Almacén": float(gym_agg[sku]), "Diferencia": None, "Tipo": "Solo en Almacén"})
 
         df_result = pd.DataFrame(rows)
         tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
