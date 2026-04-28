@@ -31,6 +31,7 @@ def download_file(service, file_id):
 @app.route("/")
 def home():
     return jsonify({"status": "ok"})
+    
 @app.route("/comparar", methods=["GET"])
 def comparar():
     try:
