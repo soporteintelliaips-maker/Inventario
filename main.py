@@ -65,14 +65,16 @@ def comparar():
         solo_liv = liv_skus - gym_skus
         solo_gym = gym_skus - liv_skus
 
-        rows = []
+       rows = []
         for sku in sorted(en_ambos, key=str):
-            q1 = float(liv_idx.loc[sku, "_qty"])
+            q1 = float(liv_idx.loc[sku, "_qty"].iloc[0] if hasattr(liv_idx.loc[sku, "_qty"], 'iloc') else liv_idx.loc[sku, "_qty"])
             q2 = float(gym_agg[sku])
             if q1 != q2:
                 rows.append({"SKU": sku, "Cantidad Liverpool": q1, "Cantidad Almacén": q2, "Diferencia": q2 - q1, "Tipo": "Cantidad diferente"})
         for sku in sorted(solo_liv, key=str):
-            rows.append({"SKU": sku, "Cantidad Liverpool": float(liv_idx.loc[sku, "_qty"]), "Cantidad Almacén": 0, "Diferencia": None, "Tipo": "Solo en Liverpool"})
+            qty = liv_idx.loc[sku, "_qty"]
+            q1 = float(qty.iloc[0] if hasattr(qty, 'iloc') else qty)
+            rows.append({"SKU": sku, "Cantidad Liverpool": q1, "Cantidad Almacén": 0, "Diferencia": None, "Tipo": "Solo en Liverpool"})
         for sku in sorted(solo_gym, key=str):
             rows.append({"SKU": sku, "Cantidad Liverpool": 0, "Cantidad Almacén": float(gym_agg[sku]), "Diferencia": None, "Tipo": "Solo en Almacén"})
 
