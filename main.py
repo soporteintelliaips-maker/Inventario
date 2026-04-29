@@ -29,7 +29,7 @@ def download_file(service, file_id):
     buf.seek(0)
     return buf
 
-# 🔍 Detectar columna de cantidad automáticamente
+# Detectar columna de cantidad
 def detectar_columna_cantidad(df):
     posibles = ["cantidad", "cant", "qty", "stock", "existencia"]
     for col in df.columns:
@@ -39,7 +39,7 @@ def detectar_columna_cantidad(df):
                 return col
     raise Exception(f"No se encontró columna de cantidad en: {list(df.columns)}")
 
-# 🔍 Detectar columna SKU automáticamente
+# Detectar columna SKU
 def detectar_columna_sku(df):
     posibles = ["sku", "codigo", "producto", "id"]
     for col in df.columns:
@@ -69,7 +69,6 @@ def comparar():
         if len(files) < 2:
             return jsonify({"error": "Se necesitan al menos 2 archivos Excel en la carpeta"}), 400
 
-        # Tomar los 2 más recientes
         file1 = files[0]
         file2 = files[1]
 
@@ -79,7 +78,7 @@ def comparar():
         liv = pd.read_excel(buf1)
         gym = pd.read_excel(buf2)
 
-        # 🔥 Detectar columnas automáticamente
+        # Detectar columnas
         col_sku_liv = detectar_columna_sku(liv)
         col_sku_gym = detectar_columna_sku(gym)
 
@@ -90,71 +89,38 @@ def comparar():
         liv["SKU_norm"] = liv[col_sku_liv].astype(str).str.strip().str.upper()
         gym["SKU_norm"] = gym[col_sku_gym].astype(str).str.strip().str.upper()
 
-        # Limpiar SKUs inválidos
-        liv = liv[(liv["SKU_norm"].notna()) & (liv["SKU_norm"] != "NAN") & (liv["SKU_norm"] != "")]
-        gym = gym[(gym["SKU_norm"].notna()) & (gym["SKU_norm"] != "NAN") & (gym["SKU_norm"] != "")]
+        # Limpiar
+        liv = liv[(liv["SKU_norm"] != "") & (liv["SKU_norm"] != "NAN")]
+        gym = gym[(gym["SKU_norm"] != "") & (gym["SKU_norm"] != "NAN")]
 
-        # Cantidades (ahora correctas)
+        # Cantidades
         liv["_qty"] = pd.to_numeric(liv[col_qty_liv], errors="coerce").fillna(0)
         gym["_qty"] = pd.to_numeric(gym[col_qty_gym], errors="coerce").fillna(0)
 
-        # Índices
-        liv_idx = liv.set_index("SKU_norm")
+        # Agrupar almacén
         gym_agg = gym.groupby("SKU_norm")["_qty"].sum()
 
-        # Sets
-        liv_skus = set(liv["SKU_norm"])
-        gym_skus = set(gym["SKU_norm"])
-
-        en_ambos = liv_skus & gym_skus
-        solo_liv = liv_skus - gym_skus
-        solo_gym = gym_skus - liv_skus
+        # 🔥 INTERSECCIÓN (solo los que están en ambos)
+        skus_comunes = set(liv["SKU_norm"]) & set(gym_agg.index)
 
         rows = []
 
-        # Comparar (solo diferencias)
-        for sku in sorted(en_ambos):
-            qty_liv = liv_idx.loc[sku, "_qty"]
-            q1 = float(qty_liv.iloc[0] if hasattr(qty_liv, "iloc") else qty_liv)
-            q2 = float(gym_agg.get(sku, 0))
+        for sku in sorted(skus_comunes):
+            qty_liv = liv[liv["SKU_norm"] == sku]["_qty"].iloc[0]
+            qty_gym = float(gym_agg.get(sku, 0))
 
-            if q1 != q2:
+            if qty_liv != qty_gym:
                 rows.append({
                     "SKU": sku,
-                    "Cantidad Liverpool": q1,
-                    "Cantidad Almacén": q2,
-                    "Diferencia": q2 - q1,
-                    "Tipo": "Cantidad diferente"
+                    "Liverpool": qty_liv,
+                    "Almacén": qty_gym,
+                    "Diferencia": qty_gym - qty_liv,
+                    "Acción": "Subir stock" if qty_gym > qty_liv else "Revisar"
                 })
-
-        # Solo Liverpool
-        for sku in sorted(solo_liv):
-            qty = liv_idx.loc[sku, "_qty"]
-            q1 = float(qty.iloc[0] if hasattr(qty, "iloc") else qty)
-
-            rows.append({
-                "SKU": sku,
-                "Cantidad Liverpool": q1,
-                "Cantidad Almacén": 0,
-                "Diferencia": None,
-                "Tipo": "Solo en Liverpool"
-            })
-
-        # Solo Almacén
-        for sku in sorted(solo_gym):
-            q2 = float(gym_agg.get(sku, 0))
-
-            rows.append({
-                "SKU": sku,
-                "Cantidad Liverpool": 0,
-                "Cantidad Almacén": q2,
-                "Diferencia": None,
-                "Tipo": "Solo en Almacén"
-            })
 
         df_result = pd.DataFrame(rows)
 
-        # Crear archivo temporal
+        # Exportar Excel
         tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         df_result.to_excel(tmp.name, index=False)
 
@@ -162,7 +128,7 @@ def comparar():
             tmp.name,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             as_attachment=True,
-            download_name="Diferencias_Inventario.xlsx"
+            download_name="Comparacion_Liverpool_vs_Almacen.xlsx"
         )
 
     except Exception as e:
