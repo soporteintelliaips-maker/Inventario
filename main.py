@@ -47,7 +47,7 @@ def comparar():
         files = results.get("files", [])
 
         if len(files) < 2:
-            return jsonify({"error": "Se necesitan al menos 2 archivos Excel en la carpeta"}), 400
+            return jsonify({"error": "Se necesitan al menos 2 archivos Excel en la carpeta o los archivos no coinciden con lo requierido"}), 400
 
         # Tomar los 2 más recientes
         file1 = files[0]
