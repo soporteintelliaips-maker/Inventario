@@ -4,8 +4,6 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2 import service_account
 import io, os, tempfile
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
 
 app = Flask(__name__)
 
@@ -31,6 +29,10 @@ def download_file(service, file_id):
     buf.seek(0)
     return buf
 
+@app.route("/")
+def home():
+    return jsonify({"status": "ok"})
+
 @app.route("/comparar", methods=["GET"])
 def comparar():
     try:
@@ -47,22 +49,28 @@ def comparar():
         if len(files) < 2:
             return jsonify({"error": "Se necesitan al menos 2 archivos Excel"}), 400
 
-        buf1 = download_file(service, files[0]["id"])
-        buf2 = download_file(service, files[1]["id"])
+        file1 = files[0]
+        file2 = files[1]
+
+        buf1 = download_file(service, file1["id"])
+        buf2 = download_file(service, file2["id"])
 
         liv = pd.read_excel(buf1)
         gym = pd.read_excel(buf2)
 
-        # Normalizar
+        # Normalizar SKU
         liv["SKU_norm"] = liv.iloc[:, 0].astype(str).str.strip().str.upper()
         gym["SKU_norm"] = gym.iloc[:, 0].astype(str).str.strip().str.upper()
 
+        # Limpiar SKUs inválidos
         liv = liv[(liv["SKU_norm"].notna()) & (liv["SKU_norm"] != "NAN") & (liv["SKU_norm"] != "")]
         gym = gym[(gym["SKU_norm"].notna()) & (gym["SKU_norm"] != "NAN") & (gym["SKU_norm"] != "")]
 
+        # Cantidades
         liv["_qty"] = pd.to_numeric(liv.iloc[:, 1], errors="coerce").fillna(0)
         gym["_qty"] = pd.to_numeric(gym.iloc[:, 1], errors="coerce").fillna(0)
 
+        # Índices
         liv_idx = liv.set_index("SKU_norm")
         gym_agg = gym.groupby("SKU_norm")["_qty"].sum()
 
@@ -72,10 +80,13 @@ def comparar():
         rows = []
 
         for sku in sorted(en_ambos):
-            q1 = float(liv_idx.loc[sku, "_qty"])
+            qty_liv = liv_idx.loc[sku, "_qty"]
+            q1 = float(qty_liv.iloc[0] if hasattr(qty_liv, "iloc") else qty_liv)
             q2 = float(gym_agg.get(sku, 0))
+
             diff = q2 - q1
 
+            # 🔥 Acción inteligente
             if diff > 0:
                 accion = "Subir en Liverpool"
             elif diff < 0:
@@ -93,38 +104,18 @@ def comparar():
 
         df_result = pd.DataFrame(rows)
 
-        # Crear Excel
+        # 🔥 OPCIONAL (descomenta si quieres solo lo importante)
+        # df_result = df_result[df_result["Acción"] != "OK"]
+
+        # Crear archivo temporal
         tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         df_result.to_excel(tmp.name, index=False)
-
-        # 🎨 Colores
-        wb = load_workbook(tmp.name)
-        ws = wb.active
-
-        rojo = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-        verde = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-        azul = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
-
-        for row in range(2, ws.max_row + 1):
-            accion = ws[f"E{row}"].value
-
-            if accion == "Subir en Liverpool":
-                fill = rojo
-            elif accion == "Bajar en Liverpool":
-                fill = azul
-            else:
-                fill = verde
-
-            for col in range(1, 6):
-                ws.cell(row=row, column=col).fill = fill
-
-        wb.save(tmp.name)
 
         return send_file(
             tmp.name,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             as_attachment=True,
-            download_name="Comparacion_Inteligente.xlsx"
+            download_name="Comparacion_Filtrada.xlsx"
         )
 
     except Exception as e:
@@ -133,3 +124,6 @@ def comparar():
             "error": str(e),
             "detalle": traceback.format_exc()
         }), 500
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
