@@ -4,6 +4,8 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2 import service_account
 import io, os, tempfile
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
 
 app = Flask(__name__)
 
@@ -29,10 +31,6 @@ def download_file(service, file_id):
     buf.seek(0)
     return buf
 
-@app.route("/")
-def home():
-    return jsonify({"status": "ok"})
-
 @app.route("/comparar", methods=["GET"])
 def comparar():
     try:
@@ -47,95 +45,86 @@ def comparar():
         files = results.get("files", [])
 
         if len(files) < 2:
-            return jsonify({"error": "Se necesitan al menos 2 archivos Excel en la carpeta o los archivos no coinciden con lo requierido"}), 400
+            return jsonify({"error": "Se necesitan al menos 2 archivos Excel"}), 400
 
-        # Tomar los 2 más recientes
-        file1 = files[0]
-        file2 = files[1]
-
-        buf1 = download_file(service, file1["id"])
-        buf2 = download_file(service, file2["id"])
+        buf1 = download_file(service, files[0]["id"])
+        buf2 = download_file(service, files[1]["id"])
 
         liv = pd.read_excel(buf1)
         gym = pd.read_excel(buf2)
 
-        # Normalizar SKU
+        # Normalizar
         liv["SKU_norm"] = liv.iloc[:, 0].astype(str).str.strip().str.upper()
         gym["SKU_norm"] = gym.iloc[:, 0].astype(str).str.strip().str.upper()
 
-        # Limpiar SKUs inválidos
         liv = liv[(liv["SKU_norm"].notna()) & (liv["SKU_norm"] != "NAN") & (liv["SKU_norm"] != "")]
         gym = gym[(gym["SKU_norm"].notna()) & (gym["SKU_norm"] != "NAN") & (gym["SKU_norm"] != "")]
 
-        # Cantidades
         liv["_qty"] = pd.to_numeric(liv.iloc[:, 1], errors="coerce").fillna(0)
         gym["_qty"] = pd.to_numeric(gym.iloc[:, 1], errors="coerce").fillna(0)
 
-        # Índices
         liv_idx = liv.set_index("SKU_norm")
         gym_agg = gym.groupby("SKU_norm")["_qty"].sum()
 
-        # Sets
-        liv_skus = set(liv["SKU_norm"])
-        gym_skus = set(gym["SKU_norm"])
-
-        en_ambos = liv_skus & gym_skus
-        solo_liv = liv_skus - gym_skus
-        solo_gym = gym_skus - liv_skus
+        # SOLO productos en ambos
+        en_ambos = set(liv["SKU_norm"]) & set(gym["SKU_norm"])
 
         rows = []
 
-        # Comparar
         for sku in sorted(en_ambos):
-            qty_liv = liv_idx.loc[sku, "_qty"]
-            q1 = float(qty_liv.iloc[0] if hasattr(qty_liv, "iloc") else qty_liv)
+            q1 = float(liv_idx.loc[sku, "_qty"])
             q2 = float(gym_agg.get(sku, 0))
+            diff = q2 - q1
 
-            if q1 != q2:
-                rows.append({
-                    "SKU": sku,
-                    "Cantidad Liverpool": q1,
-                    "Cantidad Almacén": q2,
-                    "Diferencia": q2 - q1,
-                    "Tipo": "Cantidad diferente"
-                })
-
-        # Solo Liverpool
-        for sku in sorted(solo_liv):
-            qty = liv_idx.loc[sku, "_qty"]
-            q1 = float(qty.iloc[0] if hasattr(qty, "iloc") else qty)
+            if diff > 0:
+                accion = "Subir en Liverpool"
+            elif diff < 0:
+                accion = "Bajar en Liverpool"
+            else:
+                accion = "OK"
 
             rows.append({
                 "SKU": sku,
-                "Cantidad Liverpool": q1,
-                "Cantidad Almacén": 0,
-                "Diferencia": None,
-                "Tipo": "Solo en Liverpool"
-            })
-
-        # Solo Almacén
-        for sku in sorted(solo_gym):
-            q2 = float(gym_agg.get(sku, 0))
-
-            rows.append({
-                "SKU": sku,
-                "Cantidad Liverpool": 0,
-                "Cantidad Almacén": q2,
-                "Diferencia": None,
-                "Tipo": "Solo en Almacén"
+                "Liverpool": q1,
+                "Almacén": q2,
+                "Diferencia": diff,
+                "Acción": accion
             })
 
         df_result = pd.DataFrame(rows)
 
-        # Crear archivo temporal
+        # Crear Excel
         tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
         df_result.to_excel(tmp.name, index=False)
+
+        # 🎨 Colores
+        wb = load_workbook(tmp.name)
+        ws = wb.active
+
+        rojo = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        verde = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        azul = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
+
+        for row in range(2, ws.max_row + 1):
+            accion = ws[f"E{row}"].value
+
+            if accion == "Subir en Liverpool":
+                fill = rojo
+            elif accion == "Bajar en Liverpool":
+                fill = azul
+            else:
+                fill = verde
+
+            for col in range(1, 6):
+                ws.cell(row=row, column=col).fill = fill
+
+        wb.save(tmp.name)
 
         return send_file(
             tmp.name,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             as_attachment=True,
-            download_name="Diferencias_Inventario.xlsx"
+            download_name="Comparacion_Inteligente.xlsx"
         )
 
     except Exception as e:
@@ -144,6 +133,3 @@ def comparar():
             "error": str(e),
             "detalle": traceback.format_exc()
         }), 500
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
